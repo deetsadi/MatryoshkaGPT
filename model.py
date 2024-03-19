@@ -114,7 +114,53 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    min_n_embd: int = 16 # minimum representations size to be learnt
 
+class Matryoshka_Loss(nn.Module):
+
+    def __init__(self, relative_importance=None, **kwargs):
+        super(Matryoshka_Loss, self).__init__()
+        self.ce_loss = nn.CrossEntropyLoss(**kwargs)
+        self.relative_importance = relative_importance
+
+    def forward(self, logits_tup, target):
+        # logits_tup contains multiple logits of size (b, t, v) - one for each representation size
+        b,t,v = logits_tup[-1].shape
+
+        # Calculate the ce loss for each representation size individually and simply aggregate them in the same order
+        losses_tup = torch.stack([
+            self.ce_loss(logits_i.view(b*t, v), target.view(b*t)) for logits_i in logits_tup
+            ])
+        
+        if self.relative_importance is None:
+            return losses_tup.sum()
+        else:
+            return (torch.tensor(self.relative_importance) * losses_tup).sum()
+
+class Matryoshka_Head(nn.Module):
+    def __init__(self, emb_sizes, num_classes, weights, **kwargs):
+        super(Matryoshka_Head, self).__init__()
+
+        self.emb_sizes = emb_sizes
+        self.num_classes = num_classes  
+        self.weights = weights
+        self.layer_norm = nn.LayerNorm(emb_sizes[-1])
+
+    def forward(self, x):
+        norm = self.layer_norm(self.weights)
+        # transpose weights (embedding matrix) from (v,max(emb_sizes)) -> (max(emb_sizes),v) 
+        # then multiply with x, where x has shape (b,t,max(emb_sizes))
+        norm = norm.t().to(x.device)
+        # logits_tup is a tuple holds tensors of sizes (b,t,emb_size) for emb_size in emb_sizes
+
+        logits_tup = ()
+        for emb_size in enumerate(self.emb_sizes):
+            # slice the embedding matrix (norm) up to the desired emb_size (rows as its been transposed)
+            # and slice x up to the desired emb_size
+            logits_tup += (torch.matmul(x[..., :emb_size], norm[:emb_size, :]),)
+        # return len(emb_sizes) tuples of (b, t, v)
+        return logits_tup
+        
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -130,13 +176,14 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.emb_sizes = [2 ** i for i in range(int(math.log2(config.min_n_embd)), int(math.log2(config.n_embd))+1)]
+        self.m_head = Matryoshka_Head(self.emb_sizes, config.vocab_size, self.transformer.wte.weight)
+        self.m_loss = Matryoshka_Loss()
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-
+        
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
@@ -183,11 +230,11 @@ class GPT(nn.Module):
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            logits = self.m_head(x)
+            loss = self.m_loss(logits, targets)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = self.m_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
         return logits, loss
@@ -303,7 +350,7 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, idx, max_new_tokens, emb_size, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -314,6 +361,8 @@ class GPT(nn.Module):
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
+            # grab only the desired representation by size
+            logits = logits[int(math.log2(emb_size))-int(math.log2(self.emb_sizes[0]))]
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
             # optionally crop the logits to only the top k options
