@@ -1,7 +1,8 @@
 # MatryoshkaGPT
-Inspired by [Matryoshka Representation Learning]([https://openai.com](https://arxiv.org/abs/2205.13147)) by Kusupati et. al, **MatryoshkaGPT** learns representations of varying size within the same embeddings matrix. Specifically, this enables up to `log(d)` feature representations inside the same `d` size embedding, offering much more enhanced flexibility with compute requirments for inference. 
-Training and sampling procedures are the same as nanoGPT.
+Inspired by [Matryoshka Representation Learning (MRL)]([https://openai.com](https://arxiv.org/abs/2205.13147)) by Kusupati et. al, **MatryoshkaGPT** learns representations of varying size within the same embeddings matrix. Specifically, this enables up to `log(d)` feature representations inside the same `d` size embedding, offering much more enhanced flexibility with compute requirments for inference. 
+Training and sampling procedures are the same as nanoGPT, with the addition of an `min_emb_size` argument for training, specifying the smallest representation the model should learn, and `emb_size` argument for sampling, specifying the desired representation size to sample from.
 
+There are only 2 classes implemented in `model.py` to enable MRL - `Matryoshka_Loss` and `Matryoshka_Head`.
 
 ---
 # nanoGPT
