@@ -1,5 +1,5 @@
-# MatryoshkaGPT
-Inspired by [Matryoshka Representation Learning]([https://openai.com](https://arxiv.org/abs/2205.13147)) by Kusupati et. al, **MatryoshkaGPT** learns representations of varying size within the same embeddings matrix. Specifically, this enables up to `log(d)` feature representations inside the same `d` size embedding, offering much more enhanced flexibility with compute requirments for inference. 
+# MatryoshkaRepresentationGPT
+Inspired by [Matryoshka Representation Learning]([https://openai.com](https://arxiv.org/abs/2205.13147)) by Kusupati et. al, **MatryoshkaRepresentationGPT** learns representations of varying size within the same embeddings matrix. Specifically, this enables up to `log(d)` feature representations inside the same `d` size embedding, offering much more enhanced flexibility with compute requirments for inference. 
 Training and sampling procedures are the same as nanoGPT.
 
 
